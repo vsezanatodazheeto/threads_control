@@ -80,7 +80,6 @@ where
         match recv_result {
             Ok(Message::Result { pos, res }) => {
                 result[pos] = Some(res);
-                // result.push(res);
             }
             _ => {
                 break;
