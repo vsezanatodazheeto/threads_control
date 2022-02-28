@@ -69,7 +69,7 @@ where
     }
 
     // send terminate
-    for _ in 0..NTHREADS {
+    for _ in 0..nthreads {
         pipe2.0.send(Message::Terminate).unwrap();
     }
 
