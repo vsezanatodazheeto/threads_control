@@ -3,5 +3,5 @@
 version = 3
 
 [[package]]
-name = "thread_manage"
+name = "threads_control"
 version = "0.1.0"
