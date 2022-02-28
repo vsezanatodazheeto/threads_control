@@ -1,8 +1,8 @@
-use std::fmt::Debug;
+// use std::fmt::Debug;
 use std::sync::{mpsc, mpsc::Receiver, mpsc::Sender, Arc, Mutex};
 use std::thread;
 
-const NTHREADS: usize = 4;
+const NTHREADS: usize = 5;
 
 enum Message<T> {
     Work { pos: usize, job: Job<T> },
@@ -15,7 +15,7 @@ type Job<T> = Box<dyn FnOnce() -> T + Send + 'static>;
 pub fn thread_manager<F, T>(data: Vec<T>, f: F) -> Vec<Option<T>>
 where
     F: FnOnce(T) -> T + Send + Copy + 'static,
-    T: Send + Debug + 'static,
+    T: Send + 'static,
 {
     if data.len() == 0 {
         return Vec::new();
@@ -39,7 +39,7 @@ where
     let many_receivers = Arc::new(Mutex::new(pipe2.1));
 
     // // wait for tasks, run tasks, send result
-    for worker in 0..nthreads {
+    for _worker in 0..nthreads {
         let sender = many_senders.clone();
         let receiver = many_receivers.clone();
         thread_handle.push(thread::spawn(move || loop {
@@ -47,7 +47,7 @@ where
 
             match message {
                 Message::Work { pos, job } => {
-                    // println!("Worker {} got a job", worker);
+                    // println!("Worker {} got a job", _worker);
                     let res = job();
                     sender
                         .lock()
