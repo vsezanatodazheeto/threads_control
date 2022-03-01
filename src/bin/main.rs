@@ -1,11 +1,35 @@
 use core::time::Duration;
 use std::thread;
-use threads_control::thread_manager;
+// use std::fmt::Debug;
+
+use threads_control::ThreadPool;
 
 fn test1(s: String) -> String {
     println!("{}", s.to_uppercase());
-    // thread::sleep(Duration::from_secs(1));
+    thread::sleep(Duration::from_secs(1));
     s.to_uppercase()
+}
+
+fn thread_manager<F, T>(data: Vec<T>, f: F) -> Vec<Option<T>>
+where
+    F: FnOnce(T) -> T,
+    F: 'static + Send + Copy,
+    T: 'static + Send,
+{
+    let mut result = Vec::new();
+    result.resize_with(data.len(), || None);
+
+    let pool = ThreadPool::new(data.len());
+
+    // send tasks
+    for (pos, item) in data.into_iter().enumerate() {
+        pool.execute(pos, move || f(item));
+    }
+
+    // wait for result
+    pool.result(&mut result);
+
+	result
 }
 
 fn main() {
@@ -32,29 +56,6 @@ fn main() {
         "test 20".to_string(),
     ];
 
-    // let result = vec![
-    //     Some("TEST 1".to_string()),
-    //     Some("TEST 2".to_string()),
-    //     Some("TEST 3".to_string()),
-    //     Some("TEST 4".to_string()),
-    //     Some("TEST 5".to_string()),
-    //     Some("TEST 6".to_string()),
-    //     Some("TEST 7".to_string()),
-    //     Some("TEST 8".to_string()),
-    //     Some("TEST 9".to_string()),
-    //     Some("TEST 10".to_string()),
-    //     Some("TEST 11".to_string()),
-    //     Some("TEST 12".to_string()),
-    //     Some("TEST 13".to_string()),
-    //     Some("TEST 14".to_string()),
-    //     Some("TEST 15".to_string()),
-    //     Some("TEST 16".to_string()),
-    //     Some("TEST 17".to_string()),
-    //     Some("TEST 18".to_string()),
-    //     Some("TEST 19".to_string()),
-    //     Some("TEST 20".to_string()),
-    // ];
-
-    // assert_eq!(thread_manager(strings, test1), result);
-    thread_manager(strings, test1);
+    let res = thread_manager(strings, test1);
+	println!("{:?}", res);
 }

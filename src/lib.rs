@@ -1,3 +1,4 @@
+// use std::fmt::Debug;
 use std::sync::{mpsc, mpsc::Receiver, mpsc::Sender, Arc, Mutex};
 use std::thread;
 
@@ -9,13 +10,18 @@ enum Message<T> {
     Terminate,
 }
 
-struct ThreadPool<T> {
+pub struct ThreadPool<T> {
     workers: Vec<Worker>,
     sender: Sender<Message<T>>,
     receiver: Receiver<Message<T>>,
 }
 
-impl<T: 'static + Send + std::fmt::Debug> ThreadPool<T> {
+type Job<T> = Box<dyn FnOnce() -> T + Send + 'static>;
+
+impl<T> ThreadPool<T>
+where
+    T: 'static + Send,
+{
     pub fn new(size: usize) -> ThreadPool<T> {
         let size = Self::threads_determine_qt(size);
         let mut workers = Vec::with_capacity(size);
@@ -33,8 +39,10 @@ impl<T: 'static + Send + std::fmt::Debug> ThreadPool<T> {
                 many_senders.clone(),
             ));
         }
+
         drop(many_senders);
         drop(many_receivers);
+
         ThreadPool {
             workers,
             sender: pipe2.0,
@@ -94,16 +102,17 @@ impl<T> Drop for ThreadPool<T> {
 }
 
 struct Worker {
-    id: usize,
     thread: Option<thread::JoinHandle<()>>,
 }
 
+type WorkSender<T> = Arc<Mutex<Sender<Message<T>>>>;
+type WorkReceiver<T> = Arc<Mutex<Receiver<Message<T>>>>;
+
 impl Worker {
-    fn new<T: 'static + Send + std::fmt::Debug>(
-        id: usize,
-        receiver: Arc<Mutex<Receiver<Message<T>>>>,
-        sender: Arc<Mutex<Sender<Message<T>>>>,
-    ) -> Worker {
+    fn new<T>(id: usize, receiver: WorkReceiver<T>, sender: WorkSender<T>) -> Worker
+    where
+        T: 'static + Send,
+    {
         let thread = thread::spawn(move || loop {
             let message = receiver.lock().unwrap().recv().unwrap();
 
@@ -111,7 +120,7 @@ impl Worker {
                 Message::Work { pos, job } => {
                     println!("Worker {} got a job", id);
                     let res = job();
-                    println!("res: {:?}", res);
+                    // println!("res: {:?}", res);
                     sender
                         .lock()
                         .unwrap()
@@ -125,33 +134,31 @@ impl Worker {
             }
         });
         Worker {
-            id,
             thread: Some(thread),
         }
     }
 }
 
-type Job<T> = Box<dyn FnOnce() -> T + Send + 'static>;
+// pub fn thread_manager<F, T>(data: Vec<T>, f: F)
+// // where
+// //     F: FnOnce(T) -> T,
+// //     F: 'static + Send + Copy,
+// //     T: 'static + Send,
+// // {
+// //     let mut result = Vec::new();
+// //     result.resize_with(data.len(), || None);
 
-pub fn thread_manager<F, T>(data: Vec<T>, f: F)
-where
-    F: FnOnce(T) -> T,
-    F: 'static + Send + Copy,
-    T: 'static + Send,
-{
-    let mut result = Vec::new();
-    result.resize_with(data.len(), || None);
+// //     let pool = ThreadPool::new(data.len());
 
-    let pool = ThreadPool::new(data.len());
+// //     // send tasks
+// //     for (pos, item) in data.into_iter().enumerate() {
+// //         pool.execute(pos, move || {
+// //             f(item);
+// //         });
+// //     }
 
-    // send tasks
-    for (pos, item) in data.into_iter().enumerate() {
-        pool.execute(pos, move || {
-            f(item);
-        });
-    }
+// //     // wait for result
+// //     pool.result(&mut result);
 
-    pool.result(&mut result);
-
-    println!("{:?}", result);
-}
+// //     println!("{:?}", result);
+// // }
