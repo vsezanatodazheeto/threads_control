@@ -9,45 +9,109 @@ enum Message<T> {
     Terminate,
 }
 
-type Job<T> = Box<dyn FnOnce() -> T + Send + 'static>;
+struct ThreadPool<T> {
+    workers: Vec<Worker>,
+    sender: Sender<Message<T>>,
+    receiver: Receiver<Message<T>>,
+}
 
-pub fn thread_manager<F, T>(data: Vec<T>, f: F) -> Vec<Option<T>>
-where
-    F: FnOnce(T) -> T + Send + Copy + 'static,
-    T: Send + 'static,
-{
-    if data.len() == 0 {
-        return Vec::new();
+impl<T: 'static + Send + std::fmt::Debug> ThreadPool<T> {
+    pub fn new(size: usize) -> ThreadPool<T> {
+        let size = Self::threads_determine_qt(size);
+        let mut workers = Vec::with_capacity(size);
+
+        let pipe1: (Sender<Message<T>>, Receiver<Message<T>>) = mpsc::channel();
+        let many_senders = Arc::new(Mutex::new(pipe1.0));
+
+        let pipe2: (Sender<Message<T>>, Receiver<Message<T>>) = mpsc::channel();
+        let many_receivers = Arc::new(Mutex::new(pipe2.1));
+
+        for worker_id in 0..size {
+            workers.push(Worker::new(
+                worker_id,
+                many_receivers.clone(),
+                many_senders.clone(),
+            ));
+        }
+        drop(many_senders);
+        drop(many_receivers);
+        ThreadPool {
+            workers,
+            sender: pipe2.0,
+            receiver: pipe1.1,
+        }
     }
 
-    let nthreads = if data.len() < NTHREADS {
-        data.len()
-    } else {
-        NTHREADS
-    };
+    pub fn execute<F>(&self, pos: usize, f: F)
+    where
+        F: FnOnce() -> T,
+        F: 'static + Send,
+        T: 'static + Send,
+    {
+        let job = Box::new(f);
+        self.sender.send(Message::Work { pos, job }).unwrap();
+    }
 
-    let mut result = Vec::new();
-    result.resize_with(data.len(), || None);
+    pub fn result(&self, vec_r: &mut Vec<Option<T>>) {
+        self.terminate();
+        loop {
+            let recv_result = self.receiver.recv();
+            match recv_result {
+                Ok(Message::Result { pos, res }) => {
+                    vec_r[pos] = Some(res);
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+    }
 
-    let mut thread_handle = Vec::with_capacity(NTHREADS);
+    fn threads_determine_qt(desired_size: usize) -> usize {
+        assert!(desired_size > 0);
+        if desired_size < NTHREADS {
+            desired_size
+        } else {
+            NTHREADS
+        }
+    }
 
-    let pipe1: (Sender<Message<T>>, Receiver<Message<T>>) = mpsc::channel();
-    let many_senders = Arc::new(Mutex::new(pipe1.0));
+    fn terminate(&self) {
+        for _ in 0..self.workers.len() {
+            self.sender.send(Message::Terminate).unwrap();
+        }
+    }
+}
 
-    let pipe2: (Sender<Message<T>>, Receiver<Message<T>>) = mpsc::channel();
-    let many_receivers = Arc::new(Mutex::new(pipe2.1));
+impl<T> Drop for ThreadPool<T> {
+    fn drop(&mut self) {
+        for worker in &mut self.workers {
+            if let Some(thread) = worker.thread.take() {
+                thread.join().unwrap();
+            }
+        }
+    }
+}
 
-    // // wait for tasks, run tasks, send result
-    for _worker in 0..nthreads {
-        let sender = many_senders.clone();
-        let receiver = many_receivers.clone();
-        thread_handle.push(thread::spawn(move || loop {
+struct Worker {
+    id: usize,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl Worker {
+    fn new<T: 'static + Send + std::fmt::Debug>(
+        id: usize,
+        receiver: Arc<Mutex<Receiver<Message<T>>>>,
+        sender: Arc<Mutex<Sender<Message<T>>>>,
+    ) -> Worker {
+        let thread = thread::spawn(move || loop {
             let message = receiver.lock().unwrap().recv().unwrap();
 
             match message {
                 Message::Work { pos, job } => {
-                    // println!("Worker {} got a job", _worker);
+                    println!("Worker {} got a job", id);
                     let res = job();
+                    println!("res: {:?}", res);
                     sender
                         .lock()
                         .unwrap()
@@ -59,117 +123,35 @@ where
                     break;
                 }
             }
-        }));
+        });
+        Worker {
+            id,
+            thread: Some(thread),
+        }
     }
+}
+
+type Job<T> = Box<dyn FnOnce() -> T + Send + 'static>;
+
+pub fn thread_manager<F, T>(data: Vec<T>, f: F)
+where
+    F: FnOnce(T) -> T,
+    F: 'static + Send + Copy,
+    T: 'static + Send,
+{
+    let mut result = Vec::new();
+    result.resize_with(data.len(), || None);
+
+    let pool = ThreadPool::new(data.len());
 
     // send tasks
     for (pos, item) in data.into_iter().enumerate() {
-        let job = Box::new(move || f(item));
-        pipe2.0.send(Message::Work { pos, job }).unwrap();
+        pool.execute(pos, move || {
+            f(item);
+        });
     }
 
-    // send terminate
-    for _ in 0..nthreads {
-        pipe2.0.send(Message::Terminate).unwrap();
-    }
+    pool.result(&mut result);
 
-    // wait result
-    drop(many_senders);
-    loop {
-        let recv_result = pipe1.1.recv();
-        match recv_result {
-            Ok(Message::Result { pos, res }) => {
-                result[pos] = Some(res);
-            }
-            _ => {
-                break;
-            }
-        }
-    }
-
-    // handling before return
-    for thread in thread_handle {
-        thread.join().unwrap();
-    }
-
-    result
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::*;
-    use std::thread;
-    use std::time::Duration;
-
-    fn test1(s: String) -> String {
-        println!("{}", s.to_uppercase());
-        thread::sleep(Duration::from_secs(1));
-        s.to_uppercase()
-    }
-
-    #[test]
-    fn ex1() {
-        let strings = vec![
-            "test 1".to_string(),
-            "test 2".to_string(),
-            "test 3".to_string(),
-            "test 4".to_string(),
-            "test 5".to_string(),
-            "test 6".to_string(),
-            "test 7".to_string(),
-            "test 8".to_string(),
-            "test 9".to_string(),
-            "test 10".to_string(),
-            "test 11".to_string(),
-            "test 12".to_string(),
-            "test 13".to_string(),
-            "test 14".to_string(),
-            "test 15".to_string(),
-            "test 16".to_string(),
-            "test 17".to_string(),
-            "test 18".to_string(),
-            "test 19".to_string(),
-            "test 20".to_string(),
-        ];
-        let result = vec![
-            Some("TEST 1".to_string()),
-            Some("TEST 2".to_string()),
-            Some("TEST 3".to_string()),
-            Some("TEST 4".to_string()),
-            Some("TEST 5".to_string()),
-            Some("TEST 6".to_string()),
-            Some("TEST 7".to_string()),
-            Some("TEST 8".to_string()),
-            Some("TEST 9".to_string()),
-            Some("TEST 10".to_string()),
-            Some("TEST 11".to_string()),
-            Some("TEST 12".to_string()),
-            Some("TEST 13".to_string()),
-            Some("TEST 14".to_string()),
-            Some("TEST 15".to_string()),
-            Some("TEST 16".to_string()),
-            Some("TEST 17".to_string()),
-            Some("TEST 18".to_string()),
-            Some("TEST 19".to_string()),
-            Some("TEST 20".to_string()),
-        ];
-
-        assert_eq!(thread_manager(strings, test1), result);
-    }
-
-    #[test]
-    fn ex2() {
-        let strings = vec![
-            "test 1".to_string(),
-            "test 2".to_string(),
-            "test 3".to_string(),
-        ];
-        let result = vec![
-            Some("TEST 1".to_string()),
-            Some("TEST 2".to_string()),
-            Some("TEST 3".to_string()),
-        ];
-
-        assert_eq!(thread_manager(strings, test1), result);
-    }
+    println!("{:?}", result);
 }
