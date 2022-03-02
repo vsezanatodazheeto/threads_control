@@ -1,4 +1,3 @@
-// use std::fmt::Debug;
 use std::sync::{mpsc, mpsc::Receiver, mpsc::Sender, Arc, Mutex};
 use std::thread;
 
@@ -118,7 +117,7 @@ type WorkReceiver<T> = Arc<Mutex<Receiver<Message<T>>>>;
 impl Worker {
     // Receives from ThreadPool Messages of type Work or Terminate.
     // In case of Work type, do job and send result of job.
-    // In case of Termiantetype , drop 'sender' side of channel and breaks from loop.
+    // In case of Termiante type , drops 'sender' side of channel and breaks from loop.
     fn new<T>(_id: usize, receiver: WorkReceiver<T>, sender: WorkSender<T>) -> Worker
     where
         T: 'static + Send,
