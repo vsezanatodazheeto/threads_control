@@ -22,15 +22,17 @@ impl<T> ThreadPool<T>
 where
     T: 'static + Send,
 {
-    pub fn new(size: usize) -> ThreadPool<T> {
-        let size = Self::threads_determine_qt(size);
+    // Creates thread pool with threads limited by NTHREADS.
+    pub fn new(desired_size: usize) -> ThreadPool<T> {
+        let size = Self::threads_determine_qt(desired_size);
+
         let mut workers = Vec::with_capacity(size);
 
-        let pipe1: (Sender<Message<T>>, Receiver<Message<T>>) = mpsc::channel();
-        let many_senders = Arc::new(Mutex::new(pipe1.0));
+        let (tx1, rx1) = mpsc::channel::<Message<T>>();
+        let many_senders = Arc::new(Mutex::new(tx1));
 
-        let pipe2: (Sender<Message<T>>, Receiver<Message<T>>) = mpsc::channel();
-        let many_receivers = Arc::new(Mutex::new(pipe2.1));
+        let (tx2, rx2) = mpsc::channel::<Message<T>>();
+        let many_receivers = Arc::new(Mutex::new(rx2));
 
         for worker_id in 0..size {
             workers.push(Worker::new(
@@ -45,11 +47,12 @@ where
 
         ThreadPool {
             workers,
-            sender: pipe2.0,
-            receiver: pipe1.1,
+            sender: tx2,
+            receiver: rx1,
         }
     }
 
+    // Sends messages of type Job<T> to threads.
     pub fn execute<F>(&self, pos: usize, f: F)
     where
         F: FnOnce() -> T,
@@ -60,13 +63,15 @@ where
         self.sender.send(Message::Work { pos, job }).unwrap();
     }
 
-    pub fn result(&self, vec_r: &mut Vec<Option<T>>) {
+    // Receives result of Job<T> in threads. It stop works when all threads closes
+    // their 'senders' of channel.
+    pub fn result(&mut self, result: &mut Vec<Option<T>>) {
         self.terminate();
         loop {
             let recv_result = self.receiver.recv();
             match recv_result {
                 Ok(Message::Result { pos, res }) => {
-                    vec_r[pos] = Some(res);
+                    result[pos] = Some(res);
                 }
                 _ => {
                     break;
@@ -75,6 +80,7 @@ where
         }
     }
 
+    // Determines the number of threads.
     fn threads_determine_qt(desired_size: usize) -> usize {
         assert!(desired_size > 0);
         if desired_size < NTHREADS {
@@ -84,6 +90,7 @@ where
         }
     }
 
+    // Sends 'Terminate' message to stop working into threads.
     fn terminate(&self) {
         for _ in 0..self.workers.len() {
             self.sender.send(Message::Terminate).unwrap();
@@ -109,7 +116,10 @@ type WorkSender<T> = Arc<Mutex<Sender<Message<T>>>>;
 type WorkReceiver<T> = Arc<Mutex<Receiver<Message<T>>>>;
 
 impl Worker {
-    fn new<T>(id: usize, receiver: WorkReceiver<T>, sender: WorkSender<T>) -> Worker
+    // Receives from ThreadPool Messages of type Work or Terminate.
+    // In case of Work type, do job and send result of job.
+    // In case of Termiantetype , drop 'sender' side of channel and breaks from loop.
+    fn new<T>(_id: usize, receiver: WorkReceiver<T>, sender: WorkSender<T>) -> Worker
     where
         T: 'static + Send,
     {
@@ -118,9 +128,8 @@ impl Worker {
 
             match message {
                 Message::Work { pos, job } => {
-                    println!("Worker {} got a job", id);
+                    // println!("Worker {} got a job", _id);
                     let res = job();
-                    // println!("res: {:?}", res);
                     sender
                         .lock()
                         .unwrap()
@@ -138,27 +147,3 @@ impl Worker {
         }
     }
 }
-
-// pub fn thread_manager<F, T>(data: Vec<T>, f: F)
-// // where
-// //     F: FnOnce(T) -> T,
-// //     F: 'static + Send + Copy,
-// //     T: 'static + Send,
-// // {
-// //     let mut result = Vec::new();
-// //     result.resize_with(data.len(), || None);
-
-// //     let pool = ThreadPool::new(data.len());
-
-// //     // send tasks
-// //     for (pos, item) in data.into_iter().enumerate() {
-// //         pool.execute(pos, move || {
-// //             f(item);
-// //         });
-// //     }
-
-// //     // wait for result
-// //     pool.result(&mut result);
-
-// //     println!("{:?}", result);
-// // }
